@@ -501,9 +501,14 @@ def cmd_hook_debug(args):
 
 def cmd_hook_start(args):
     """Called by UserPromptSubmit hook - reads JSON from stdin."""
+    if sys.stdin.isatty():
+        return
     try:
+        ready, _, _ = select.select([sys.stdin], [], [], 3)
+        if not ready:
+            return
         input_data = json.load(sys.stdin)
-    except (json.JSONDecodeError, EOFError):
+    except (json.JSONDecodeError, EOFError, OSError):
         return
 
     session_id = input_data.get("session_id", input_data.get("sessionId", ""))
@@ -549,9 +554,14 @@ def cmd_hook_start(args):
 
 def cmd_hook_stop(args):
     """Called by Stop hook - reads JSON from stdin."""
+    if sys.stdin.isatty():
+        return
     try:
+        ready, _, _ = select.select([sys.stdin], [], [], 3)
+        if not ready:
+            return
         input_data = json.load(sys.stdin)
-    except (json.JSONDecodeError, EOFError):
+    except (json.JSONDecodeError, EOFError, OSError):
         return
 
     session_id = input_data.get("session_id", input_data.get("sessionId", ""))
