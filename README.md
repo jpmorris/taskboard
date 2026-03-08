@@ -10,7 +10,10 @@ Symlink the script into your PATH:
 
 ```bash
 ln -sf ~/code/taskboard/taskboard.py ~/.local/bin/taskboard
+chmod +x ~/code/taskboard/taskboard.py
 ```
+
+Ensure `~/.local/bin` is in your PATH.
 
 ## Live Dashboard
 
@@ -24,6 +27,7 @@ Interactive auto-refreshing display with keyboard controls:
 - **`d`** — mark a task done by ID
 - **`r`** — remove a task by ID
 - **`m`** — reorder (move a task before another ID, or 0 for end)
+- **`h`** — hide window temporarily (i3 scratchpad)
 - **`q`** — quit
 
 Tasks display in the order you set — top is highest priority. IDs renumber automatically after moves/removes.
@@ -46,11 +50,11 @@ taskboard add "refactor auth module"
 taskboard add "review PR" -c /path/to/project
 ```
 
-Manual tasks get status `TODO` (not `RUNNING`). Remove them when finished — there's no need to mark them done.
+Manual tasks get status `TODO` (not `RUNNING`). Remove them when finished.
 
 ## Claude Code Integration
 
-Auto-tracks agent sessions. When you submit a prompt, the task shows as RUNNING. When Claude finishes responding, it flips to DONE. One line per project directory — subsequent prompts update the same entry.
+Auto-tracks agent sessions. When you submit a prompt, the task shows as RUNNING. When Claude finishes responding, it flips to DONE. Each session gets its own line — multiple agents in the same directory show separately.
 
 ### Setup
 
@@ -92,6 +96,82 @@ Same hooks work for VS Code Copilot agent mode. Shows as tool `vscode` in the da
 3. Reload VS Code (`Ctrl+Shift+P` → "Developer: Reload Window")
 
 Verify hooks are loaded: type `/hooks` in the Copilot chat.
+
+### WSL (Windows)
+
+If running Claude Code in WSL, put the hooks in the WSL-side `~/.claude/settings.json`. For VS Code on Windows with WSL remote, the extension host runs in WSL so the same config works.
+
+## Remote Agent Tracking (Reverse Tunnel)
+
+Track AI agent sessions running on a remote server (e.g. SageMaker) on your local dashboard. No taskboard installation needed on the remote — just `curl`.
+
+### How it works
+
+1. Your SSH connection script adds reverse port forwards (`-R`)
+2. Local machine runs `socat` listeners that pipe data to `taskboard hook-start/stop`
+3. Remote `~/.claude/settings.json` uses `curl` to POST hook data through the tunnel
+4. Tasks appear in your local `tasks.json` — no syncing, no polling
+
+### Local machine setup
+
+Install socat:
+
+```bash
+# Arch/Manjaro
+sudo pacman -S socat
+# Ubuntu/Debian/WSL
+sudo apt install socat
+```
+
+Start listeners (your connection script should start these when the tunnel is up, kill them on disconnect):
+
+```bash
+socat TCP-LISTEN:9998,reuseaddr,fork EXEC:"taskboard hook-start" &
+socat TCP-LISTEN:9999,reuseaddr,fork EXEC:"taskboard hook-stop" &
+```
+
+### SSH tunnel setup
+
+Add reverse port forwards to your SSH connection. The exact command depends on your tunnel setup, but the key flags are:
+
+```bash
+ssh ... -R 9998:localhost:9998 -R 9999:localhost:9999 remote-host
+```
+
+For SSM-based connections, add the `-R` flags to whichever SSH command establishes the tunnel.
+
+### Remote server setup
+
+On the remote server (SageMaker etc.), create `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "curl -sf http://localhost:9998 -d @-" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "curl -sf http://localhost:9999 -d @-" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Also enable in VS Code settings on the remote:
+- **Chat: Use Hooks** — checked
+- **Chat: Use Claude Hooks** — checked
+
+That's it. When an agent fires on the remote, `curl` POSTs the hook JSON through the reverse tunnel to your local socat, which pipes it to `taskboard hook-start/stop`. Tasks appear on your local dashboard instantly.
+
+If the tunnel is down, `curl -sf` fails silently — no impact on the agent.
 
 ## Wrapping Commands (`taskboard run`)
 
@@ -136,7 +216,7 @@ Runs through the shell, so builtins, pipes, and redirects all work.
 
 ## CPU Monitoring (`taskboard monitor`)
 
-Monitor a process's CPU usage and automatically toggle RUNNING/DONE based on a threshold. Useful for tracking remote debug sessions or batch jobs where you want to know when the process is actively working vs idle/paused.
+Monitor a process's CPU usage and automatically toggle RUNNING/DONE based on a threshold. Useful for tracking remote debug sessions or batch jobs.
 
 ```bash
 taskboard monitor "description" -- command-that-outputs-cpu-percent
@@ -147,14 +227,8 @@ The command after `--` must output a single number (CPU %).
 ### Examples
 
 ```bash
-# Monitor a local python process by PID
 taskboard monitor "debug session" -- bash -c 'ps -p $(pgrep -f my_script.py) -o %cpu --no-headers || echo 0'
-
-# Monitor a remote process on sagemaker
 taskboard monitor "remote training" -- ssh sagemaker 'ps -p $(pgrep -f train.py) -o %cpu --no-headers || echo 0'
-
-# Monitor by process name
-taskboard monitor "python work" -- bash -c 'ps -C python3 -o %cpu --no-headers | head -1 || echo 0'
 ```
 
 ### Options
@@ -165,7 +239,40 @@ taskboard monitor "python work" -- bash -c 'ps -C python3 -o %cpu --no-headers |
 -t tool          # custom tool name (default: monitor)
 ```
 
-Cycles automatically: CPU spikes above threshold → RUNNING, drops below → DONE. Press `Ctrl+C` to stop monitoring.
+Cycles automatically: CPU above threshold → RUNNING, below → DONE. `Ctrl+C` to stop.
+
+## i3 Floating Dashboard
+
+Auto-float a small always-visible taskboard window.
+
+### Setup
+
+Add to `~/.config/i3/config`:
+
+```
+for_window [title="^TASKBOARD$"] floating enable, sticky enable, resize set 600 300, move position 3240 0
+exec --no-startup-id taskboard-launch
+```
+
+Create a Terminator profile in `~/.config/terminator/config`:
+
+```ini
+[profiles]
+  [[taskboard]]
+    font = SauceCodePro Nerd Font 5
+    show_titlebar = False
+    use_system_font = False
+```
+
+The `taskboard-launch` script opens Terminator with this profile.
+
+## Windows Terminal
+
+```powershell
+wt.exe -p "Taskboard" --size 80,15 --pos 1800,0 -F
+```
+
+`-F` is focus mode (no tabs/title bar). Set `"historySize": 0` in the Windows Terminal profile to prevent scrollback ghosting.
 
 ## Other Commands
 
