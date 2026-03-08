@@ -16,17 +16,43 @@ from datetime import datetime
 from pathlib import Path
 
 TASKBOARD_DIR = Path.home() / ".taskboard"
-TASKS_FILE = TASKBOARD_DIR / "tasks.json"
+TASKS_FILE = TASKBOARD_DIR / "local.json"
+# Legacy support: migrate tasks.json → local.json
+_LEGACY_FILE = TASKBOARD_DIR / "tasks.json"
 
 
-def load_tasks():
-    if not TASKS_FILE.exists():
+def _load_json(path):
+    if not path.exists():
         return []
-    with open(TASKS_FILE) as f:
+    with open(path) as f:
         try:
             return json.load(f)
         except json.JSONDecodeError:
             return []
+
+
+def load_tasks():
+    """Load tasks from local.json (or legacy tasks.json)."""
+    tasks = _load_json(TASKS_FILE)
+    if not tasks and _LEGACY_FILE.exists():
+        tasks = _load_json(_LEGACY_FILE)
+        if tasks:
+            save_tasks(tasks)
+            _LEGACY_FILE.unlink()
+    return tasks
+
+
+def load_all_tasks():
+    """Load local + all remote task files. Returns list of (source, tasks)."""
+    result = [("local", load_tasks())]
+    for f in sorted(TASKBOARD_DIR.glob("*.json")):
+        if f.name in ("local.json", "tasks.json", "hidden.json", "hook_debug.json"):
+            continue
+        if f.suffix == ".json":
+            source = f.stem  # e.g. "sagemaker" from sagemaker.json
+            tasks = _load_json(f)
+            result.append((source, tasks))
+    return result
 
 
 def save_tasks(tasks):
@@ -129,29 +155,18 @@ def cmd_link(args):
 
 
 def cmd_list(args):
-    tasks = load_tasks()
-    if not tasks:
+    all_groups = load_all_tasks()
+    has_any = False
+    for source, tasks in all_groups:
+        if not tasks:
+            continue
+        has_any = True
+        if source != "local":
+            print(f"── {source} ──")
+        for t in tasks:
+            _render_task(t, source=None if source == "local" else source)
+    if not has_any:
         print("No tasks.")
-        return
-    for t in tasks:
-        if t["status"] == "running":
-            icon, color = "●", "\033[33m"
-        elif t["status"] == "todo":
-            icon, color = "○", "\033[36m"
-        elif t["status"] == "failed":
-            icon, color = "✗", "\033[31m"
-        else:
-            icon, color = "✓", "\033[32m"
-        reset = "\033[0m"
-        tool = _trunc(t.get("tool", "?"), 7)
-        elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
-        cwd_short = _trunc(os.path.basename(t.get("cwd", "")), 17)
-        desc = _trunc(t["description"], 23)
-        print(
-            f"{color}{icon}{reset}"
-            f"[{tool:7}]{desc:23}"
-            f" {elapsed:>7} {cwd_short}"
-        )
 
 
 def _renumber(tasks):
@@ -175,42 +190,52 @@ def _trunc(s, width):
     return s[:width-1] + "~" if len(s) > width else s
 
 
-def _render_watch(tasks, mode_msg=None):
+def _render_task(t, source=None):
+    """Render a single task line."""
+    if t["status"] == "running":
+        color, icon = "\033[33m", "●"
+    elif t["status"] == "todo":
+        color, icon = "\033[36m", "○"
+    elif t["status"] == "failed":
+        color, icon = "\033[31m", "✗"
+    else:
+        color, icon = "\033[32m", "✓"
+    reset = "\033[0m"
+    tool = _trunc(t.get("tool", "?"), 7)
+    elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
+    cwd_short = _trunc(os.path.basename(t.get("cwd", "")), 17)
+    desc = _trunc(t["description"], 23)
+    prefix = f"{color}{t['id']:>2}{icon}{reset}" if not source else f"{color} {icon}{reset}"
+    print(
+        f"{prefix}"
+        f"[{tool:7}]{desc:23}"
+        f" {elapsed:>7} {cwd_short}"
+    )
+
+
+def _render_watch(tasks, remote_groups=None, mode_msg=None):
     """Render the watch screen."""
     sys.stdout.write("\033[2J\033[H")
     now = datetime.now().strftime("%m/%d %H:%M")
     print(f"\033[1mTASKBOARD\033[0m {now}")
     print(f"{'─' * 50}")
-    if not tasks:
-        print(" No tasks. Use: taskboard add \"description\"")
-    else:
-        running = [t for t in tasks if t["status"] == "running"]
-        done = [t for t in tasks if t["status"] == "done"]
-        failed = [t for t in tasks if t["status"] == "failed"]
+    has_any = bool(tasks)
+    if tasks:
         for t in tasks:
-            if t["status"] == "running":
-                color, icon = "\033[33m", "●"
-            elif t["status"] == "todo":
-                color, icon = "\033[36m", "○"
-            elif t["status"] == "failed":
-                color, icon = "\033[31m", "✗"
-            else:
-                color, icon = "\033[32m", "✓"
-            reset = "\033[0m"
-            tool = _trunc(t.get("tool", "?"), 7)
-            elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
-            cwd_short = _trunc(os.path.basename(t.get("cwd", "")), 17)
-            desc = _trunc(t["description"], 23)
-            print(
-                f"{color}{t['id']:>2}{icon}{reset}"
-                f"[{tool:7}]{desc:23}"
-                f" {elapsed:>7} {cwd_short}"
-            )
+            _render_task(t)
+    if remote_groups:
+        for source, rtasks in remote_groups:
+            if rtasks:
+                has_any = True
+                print(f"\033[2m{'─' * 3} {source} {'─' * (44 - len(source))}\033[0m")
+                for t in rtasks:
+                    _render_task(t, source=source)
+    if not has_any:
+        print("No tasks.")
     if mode_msg:
         print(mode_msg)
     else:
         print("[a]dd [d]one [r]m [m]ove [h]ide [q]uit")
-    # Clear everything below current cursor position
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -222,8 +247,10 @@ def cmd_watch(args):
     sys.stdout.flush()
     try:
         while True:
-            tasks = load_tasks()
-            _render_watch(tasks)
+            all_groups = load_all_tasks()
+            tasks = all_groups[0][1]  # local tasks
+            remote_groups = all_groups[1:]  # remote sources
+            _render_watch(tasks, remote_groups)
 
             # Set raw mode for single keypress detection
             tty.setcbreak(sys.stdin)
