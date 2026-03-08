@@ -526,9 +526,9 @@ def cmd_hook_start(args):
 
     tool = "vscode" if os.environ.get("VSCODE_PID") else "claude"
 
-    # Reuse existing agent task for this cwd (one line per project)
+    # One line per session (reuse across prompts within same session)
     for t in tasks:
-        if t.get("tool") in ("claude", "vscode") and t.get("cwd") == cwd:
+        if t.get("tool") in ("claude", "vscode") and t.get("session_id") == session_id:
             t["status"] = "running"
             t["description"] = desc
             t["tool"] = tool
