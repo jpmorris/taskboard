@@ -1,6 +1,6 @@
 # taskboard
 
-A CLI dashboard to track tasks — manual to-dos, AI agent sessions, long-running commands, and remote jobs.
+sdffA CLI dashboard to track tasks — manual to-dos, AI agent sessions, long-running commands, and remote jobs.
 
 Task data is stored in `~/.taskboard/tasks.json`.
 
@@ -85,7 +85,7 @@ Shows as tool `claude` in the dashboard.
 
 ## VS Code Copilot Integration
 
-Same hooks work for VS Code Copilot agent mode. Shows as tool `vscode` in the dashboard (detected via `VSCODE_PID` environment variable).
+Same hooks work for VS Code Copilot agent mode. Shows as tool `vscode` in the dashboard (detected via `VSCODE_CWD` environment variable).
 
 ### Setup
 
@@ -100,6 +100,38 @@ Verify hooks are loaded: type `/hooks` in the Copilot chat.
 ### WSL (Windows)
 
 If running Claude Code in WSL, put the hooks in the WSL-side `~/.claude/settings.json`. For VS Code on Windows with WSL remote, the extension host runs in WSL so the same config works.
+
+## Copilot CLI Integration
+
+Auto-tracks Copilot CLI agent sessions. Shows as tool `copilot` in the dashboard.
+
+### Setup
+
+Create `.github/hooks/taskboard.json` in your project repository:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "taskboard hook-copilot-start"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "taskboard hook-copilot-stop"
+      }
+    ]
+  }
+}
+```
+
+Unlike Claude hooks (which are global), Copilot CLI hooks are per-project (loaded from `.github/hooks/*.json` in the repository).
+
+Since Copilot CLI doesn't include a session ID in hook payloads, tasks are matched by working directory — one task per active `cwd`. If a session ends with an error, it shows as `failed`.
 
 ## Remote Agent Tracking (Reverse Tunnel)
 

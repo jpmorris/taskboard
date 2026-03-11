@@ -97,8 +97,8 @@ def cmd_add(args):
         "created_at": datetime.now().isoformat(),
         "completed_at": None,
     }
-    tasks.append(task)
-    save_tasks(tasks)
+    tasks.insert(0, task)
+    save_tasks(_renumber(tasks))
     print(f"#{task['id']} added: {task['description']}")
 
 
@@ -267,7 +267,7 @@ def cmd_watch(args):
                 break
             elif key == "h":
                 tasks = load_tasks()
-                _render_watch(tasks, "Hide for how many minutes? (default: 2)")
+                _render_watch(tasks, mode_msg="Hide for how many minutes? (default: 2)")
                 answer = _read_input(" > ")
                 hide_mins = int(answer) if answer and answer.isdigit() else 2
                 # i3: use scratchpad. Otherwise: xdotool minimize.
@@ -296,7 +296,7 @@ def cmd_watch(args):
                         subprocess.run(["xdotool", "windowactivate", wid], capture_output=True)
             elif key == "a":
                 tasks = load_tasks()
-                _render_watch(tasks, "Add task: (enter to cancel)")
+                _render_watch(tasks, mode_msg="Add task: (enter to cancel)")
                 desc = _read_input(" > ")
                 if desc:
                     task = {
@@ -309,11 +309,11 @@ def cmd_watch(args):
                         "created_at": datetime.now().isoformat(),
                         "completed_at": None,
                     }
-                    tasks.append(task)
+                    tasks.insert(0, task)
                     save_tasks(_renumber(tasks))
             elif key == "d":
                 tasks = load_tasks()
-                _render_watch(tasks, "Mark done which task ID? (enter to cancel)")
+                _render_watch(tasks, mode_msg="Mark done which task ID? (enter to cancel)")
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
@@ -325,7 +325,7 @@ def cmd_watch(args):
                     save_tasks(tasks)
             elif key == "r":
                 tasks = load_tasks()
-                _render_watch(tasks, "Remove which task ID? (enter to cancel)")
+                _render_watch(tasks, mode_msg="Remove which task ID? (enter to cancel)")
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
@@ -334,11 +334,11 @@ def cmd_watch(args):
                         save_tasks(_renumber(new_tasks))
             elif key == "m":
                 tasks = load_tasks()
-                _render_watch(tasks, "Move which task ID?")
+                _render_watch(tasks, mode_msg="Move which task ID?")
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
-                    _render_watch(tasks, f"Place task #{tid} before which ID? (0 = end)")
+                    _render_watch(tasks, mode_msg=f"Place task #{tid} before which ID? (0 = end)")
                     answer2 = _read_input(" > ")
                     if answer2 and answer2.isdigit():
                         target = int(answer2)
@@ -551,7 +551,7 @@ def cmd_hook_start(args):
 
     tasks = load_tasks()
 
-    tool = "vscode" if os.environ.get("VSCODE_PID") else "claude"
+    tool = "vscode" if (os.environ.get("VSCODE_PID") or os.environ.get("VSCODE_CWD")) else "claude"
 
     # One line per session (reuse across prompts within same session)
     for t in tasks:
@@ -622,6 +622,82 @@ def cmd_hook(args):
     cmd_hook_stop(args)
 
 
+def cmd_hook_copilot_start(args):
+    """Called by Copilot CLI userPromptSubmitted hook - reads JSON from stdin."""
+    if sys.stdin.isatty():
+        return
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], 3)
+        if not ready:
+            return
+        input_data = json.load(sys.stdin)
+    except (json.JSONDecodeError, EOFError, OSError):
+        return
+
+    cwd = input_data.get("cwd", "") or os.getcwd()
+    prompt = input_data.get("prompt", input_data.get("initialPrompt", ""))
+
+    desc = prompt[:60].replace("\n", " ").strip()
+    if len(prompt) > 60:
+        desc += "..."
+    if not desc:
+        desc = "copilot session"
+
+    tasks = load_tasks()
+
+    # Copilot CLI has no session_id — one entry per cwd, reused across sessions
+    for t in tasks:
+        if t.get("tool") == "copilot" and t.get("cwd") == cwd:
+            t["status"] = "running"
+            t["description"] = desc
+            t["created_at"] = datetime.now().isoformat()
+            t["completed_at"] = None
+            save_tasks(tasks)
+            return
+
+    task = {
+        "id": next_id(tasks),
+        "description": desc,
+        "status": "running",
+        "tool": "copilot",
+        "cwd": cwd,
+        "session_id": None,
+        "created_at": datetime.now().isoformat(),
+        "completed_at": None,
+    }
+    tasks.append(task)
+    save_tasks(tasks)
+
+
+def cmd_hook_copilot_stop(args):
+    """Called by Copilot CLI sessionEnd hook - reads JSON from stdin."""
+    if sys.stdin.isatty():
+        return
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], 3)
+        if not ready:
+            return
+        input_data = json.load(sys.stdin)
+    except (json.JSONDecodeError, EOFError, OSError):
+        return
+
+    cwd = input_data.get("cwd", "")
+    reason = input_data.get("reason", "complete")
+    status = "failed" if reason == "error" else "done"
+
+    tasks = load_tasks()
+
+    for t in reversed(tasks):
+        if t["status"] != "running":
+            continue
+        if t.get("tool") == "copilot" and t.get("cwd") == cwd:
+            t["status"] = status
+            t["completed_at"] = datetime.now().isoformat()
+            save_tasks(tasks)
+            return
+
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="taskboard",
@@ -657,6 +733,8 @@ def main():
     sub.add_parser("hook-start", help="Start hook handler (reads JSON from stdin)")
     sub.add_parser("hook-stop", help="Stop hook handler (reads JSON from stdin)")
     sub.add_parser("hook-debug", help="Dump hook input and env to ~/.taskboard/hook_debug.json")
+    sub.add_parser("hook-copilot-start", help="Copilot CLI userPromptSubmitted hook handler")
+    sub.add_parser("hook-copilot-stop", help="Copilot CLI sessionEnd hook handler")
 
     p_run = sub.add_parser("run", help="Run a command and track it as a task")
     p_run.add_argument("description", help="Task description")
@@ -693,6 +771,8 @@ def main():
         "hook-start": cmd_hook_start,
         "hook-stop": cmd_hook_stop,
         "hook-debug": cmd_hook_debug,
+        "hook-copilot-start": cmd_hook_copilot_start,
+        "hook-copilot-stop": cmd_hook_copilot_stop,
         "run": cmd_run,
         "monitor": cmd_monitor,
     }

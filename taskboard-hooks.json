@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "taskboard hook-copilot-start"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "taskboard hook-copilot-stop"
+      }
+    ]
+  }
+}
