@@ -97,6 +97,8 @@ def cmd_add(args):
         "created_at": datetime.now().isoformat(),
         "completed_at": None,
     }
+    if getattr(args, "link", None):
+        task["link"] = args.link
     tasks.insert(0, task)
     save_tasks(_renumber(tasks))
     print(f"#{task['id']} added: {task['description']}")
@@ -178,11 +180,14 @@ def _renumber(tasks):
 
 def _read_input(prompt_text, timeout=10):
     """Read a line of input with timeout, in normal terminal mode."""
+    # Flush any leftover bytes in the input buffer (e.g. lingering \r from WSL keypress)
+    termios.tcflush(sys.stdin, termios.TCIFLUSH)
     sys.stdout.write(prompt_text)
     sys.stdout.flush()
     ready, _, _ = select.select([sys.stdin], [], [], timeout)
     if ready:
-        return sys.stdin.readline().strip()
+        line = sys.stdin.readline().strip()
+        return line if line else None
     return None
 
 
@@ -190,52 +195,127 @@ def _trunc(s, width):
     return s[:width-1] + "~" if len(s) > width else s
 
 
-def _render_task(t, source=None):
+def _render_task(t, desc_width=30, source=None):
     """Render a single task line."""
-    if t["status"] == "running":
-        color, icon = "\033[33m", "●"
-    elif t["status"] == "todo":
-        color, icon = "\033[36m", "○"
-    elif t["status"] == "failed":
-        color, icon = "\033[31m", "✗"
+    is_manual = t.get("tool") == "manual"
+    if is_manual:
+        color, icon = "\033[32m", " "   # green, no icon
+    elif t["status"] == "running":
+        color, icon = "\033[33m", "●"  # yellow dot
     else:
-        color, icon = "\033[32m", "✓"
+        color, icon = "\033[32m", "✓"  # green checkmark
     reset = "\033[0m"
-    tool = _trunc(t.get("tool", "?"), 7)
+    tool = _trunc(t.get("tool", "?"), 6)
     elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
-    cwd_short = _trunc(os.path.basename(t.get("cwd", "")), 17)
-    desc = _trunc(t["description"], 23)
-    prefix = f"{color}{t['id']:>2}{icon}{reset}" if not source else f"{color} {icon}{reset}"
-    print(
-        f"{prefix}"
-        f"[{tool:7}]{desc:23}"
-        f" {elapsed:>7} {cwd_short}"
+    if is_manual:
+        combined = t["description"]
+    else:
+        cwd_name = os.path.basename(t.get("cwd", "")) or t.get("cwd", "")
+        combined = f"{cwd_name}: {t['description']}"
+    desc = _trunc(combined, desc_width)
+    id_part = f"{t['id']:>2}" if not source else " "
+    due_text, due_color = _format_due(t)
+    due_col = f" {due_color}{due_text}{reset}" if due_color else f" {due_text}"
+    link_marker = f"\033[2m@\033[0m" if t.get("link") else " "
+    sys.stdout.write(
+        f"{color}{id_part}{icon}{reset}"
+        f"[{tool:6}]{link_marker}{desc:{desc_width}}"
+        f"{due_col}"
+        f" {elapsed:>7}"
+        f"\033[K\n"
     )
+
+
+def _parse_due_date(s):
+    """Parse a due date string into a date object. Returns None on failure."""
+    s = s.strip()
+    fmts = ["%b%d", "%B%d", "%m/%d", "%m-%d", "%b %d", "%B %d"]
+    for fmt in fmts:
+        try:
+            d = datetime.strptime(s, fmt).replace(year=datetime.now().year).date()
+            # Roll to next year if the date has already passed by more than a day
+            if d < datetime.now().date():
+                from datetime import timedelta
+                d = d.replace(year=d.year + 1)
+            return d
+        except ValueError:
+            continue
+    # Try with explicit year e.g. "Apr30 2026" or "2026-04-30"
+    for fmt in ["%b%d %Y", "%Y-%m-%d", "%m/%d/%Y"]:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _format_due(t):
+    """Return (text, color_code) for the due date column (5 chars wide)."""
+    raw = t.get("due_date")
+    if not raw:
+        return "     ", ""
+    try:
+        from datetime import date, timedelta
+        due = date.fromisoformat(raw)
+        today = date.today()
+        text = due.strftime("%b%d")  # e.g. "Apr30"
+        if due < today:
+            return text, "\033[31m"   # red: overdue
+        elif due <= today + timedelta(days=3):
+            return text, "\033[33m"   # yellow: soon
+        else:
+            return text, "\033[36m"   # cyan: future
+    except ValueError:
+        return "     ", ""
+
+
+
+def _is_tracked(t):
+    """Return True if a task belongs in the top (manual/tracked) section."""
+    return t.get("tool") == "manual" or t.get("tracked", False)
 
 
 def _render_watch(tasks, remote_groups=None, mode_msg=None):
     """Render the watch screen."""
-    sys.stdout.write("\033[2J\033[H")
+    try:
+        term_width = os.get_terminal_size().columns
+    except OSError:
+        term_width = 80
+    # Fixed columns: 3 (id+icon) + 8 ([tool:6]) + 1 (space) + 6 (due) + 8 ( elapsed) + 2 (link @)
+    desc_width = max(30, term_width - 28)
+
+    sys.stdout.write("\033[H")
     now = datetime.now().strftime("%m/%d %H:%M")
-    print(f"\033[1mTASKBOARD\033[0m {now}")
-    print(f"{'─' * 50}")
-    has_any = bool(tasks)
-    if tasks:
-        for t in tasks:
-            _render_task(t)
+    sys.stdout.write(f"\033[1mTASKBOARD\033[0m {now}\033[K\n")
+    sys.stdout.write(f"{'─' * 50}\033[K\n")
+
+    top = [t for t in tasks if _is_tracked(t)]
+    auto = [t for t in tasks if not _is_tracked(t)]
+    has_any = bool(top or auto)
+
+    for t in top:
+        _render_task(t, desc_width=desc_width)
+
+    if auto:
+        if top:
+            sys.stdout.write(f"\033[2m{'─' * 50}\033[0m\033[K\n")
+        for t in auto:
+            _render_task(t, desc_width=desc_width)
+
     if remote_groups:
         for source, rtasks in remote_groups:
             if rtasks:
                 has_any = True
-                print(f"\033[2m{'─' * 3} {source} {'─' * (44 - len(source))}\033[0m")
+                sys.stdout.write(f"\033[2m{'─' * 3} {source} {'─' * (44 - len(source))}\033[0m\033[K\n")
                 for t in rtasks:
-                    _render_task(t, source=source)
+                    _render_task(t, desc_width=desc_width, source=source)
+
     if not has_any:
-        print("No tasks.")
+        sys.stdout.write(f"No tasks.\033[K\n")
     if mode_msg:
-        print(mode_msg)
+        sys.stdout.write(f"{mode_msg}\033[K\n")
     else:
-        print("[a]dd [d]one [r]m [m]ove [h]ide [q]uit")
+        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [l]ink [h]ide [q]uit\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -297,7 +377,7 @@ def cmd_watch(args):
             elif key == "a":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Add task: (enter to cancel)")
-                desc = _read_input(" > ")
+                desc = _read_input(" > ", timeout=120)
                 if desc:
                     task = {
                         "id": next_id(tasks),
@@ -311,18 +391,6 @@ def cmd_watch(args):
                     }
                     tasks.insert(0, task)
                     save_tasks(_renumber(tasks))
-            elif key == "d":
-                tasks = load_tasks()
-                _render_watch(tasks, mode_msg="Mark done which task ID? (enter to cancel)")
-                answer = _read_input(" > ")
-                if answer and answer.isdigit():
-                    tid = int(answer)
-                    for t in tasks:
-                        if t["id"] == tid and t["status"] == "running":
-                            t["status"] = "done"
-                            t["completed_at"] = datetime.now().isoformat()
-                            break
-                    save_tasks(tasks)
             elif key == "r":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Remove which task ID? (enter to cancel)")
@@ -365,6 +433,67 @@ def cmd_watch(args):
                                     new_list.append(moving)
                                 remaining = new_list
                             save_tasks(_renumber(remaining))
+            elif key == "t":
+                tasks = load_tasks()
+                _render_watch(tasks, mode_msg="Track which task ID? (enter to cancel)")
+                answer = _read_input(" > ")
+                if answer and answer.isdigit():
+                    tid = int(answer)
+                    for t in tasks:
+                        if t["id"] == tid:
+                            t["tracked"] = True
+                            break
+                    save_tasks(tasks)
+            elif key == "d":
+                tasks = load_tasks()
+                _render_watch(tasks, mode_msg="Set due date - which task ID? (enter to cancel)")
+                answer = _read_input(" > ")
+                if answer and answer.isdigit():
+                    tid = int(answer)
+                    existing = next((t.get("due_date", "") for t in tasks if t["id"] == tid), "")
+                    hint = f" (current: {existing}, 'clear' to remove)" if existing else " (e.g. Apr30, 3/15)"
+                    _render_watch(tasks, mode_msg=f"Due date for #{tid}{hint}:")
+                    date_str = _read_input(" > ", timeout=120)
+                    if date_str is not None:
+                        for t in tasks:
+                            if t["id"] == tid:
+                                if date_str.strip().lower() == "clear":
+                                    t.pop("due_date", None)
+                                else:
+                                    parsed = _parse_due_date(date_str)
+                                    if parsed:
+                                        t["due_date"] = parsed.isoformat()
+                                break
+                        save_tasks(tasks)
+            elif key == "l":
+                tasks = load_tasks()
+                _render_watch(tasks, mode_msg="Link which task ID? (enter to cancel)")
+                answer = _read_input(" > ")
+                if answer and answer.isdigit():
+                    tid = int(answer)
+                    task = next((t for t in tasks if t["id"] == tid), None)
+                    if task:
+                        existing = task.get("link", "")
+                        if existing:
+                            # Reveal mode: show link, offer edit/clear
+                            _render_watch(tasks, mode_msg=f"#{tid}: {existing}  [e]dit [c]lear [enter=dismiss]")
+                            action = _read_input(" > ", timeout=120)
+                            if action and action.strip().lower() == "e":
+                                _render_watch(tasks, mode_msg=f"New link for #{tid}:")
+                                new_link = _read_input(" > ", timeout=120)
+                                if new_link and new_link.strip():
+                                    task["link"] = new_link.strip()
+                                    save_tasks(tasks)
+                            elif action and action.strip().lower() == "c":
+                                task.pop("link", None)
+                                save_tasks(tasks)
+                        else:
+                            # Add mode
+                            _render_watch(tasks, mode_msg=f"Paste link for #{tid}:")
+                            new_link = _read_input(" > ", timeout=120)
+                            if new_link and new_link.strip():
+                                task["link"] = new_link.strip()
+                                save_tasks(tasks)
     except KeyboardInterrupt:
         pass
     finally:
@@ -710,6 +839,7 @@ def main():
     p_add.add_argument("-t", "--tool", default=None, help="Tool name (claude, copilot)")
     p_add.add_argument("-c", "--cwd", default=None, help="Working directory (default: cwd)")
     p_add.add_argument("-s", "--session", default=None, help="Session ID")
+    p_add.add_argument("-l", "--link", default=None, help="URL to associate with this task")
 
     p_done = sub.add_parser("done", help="Mark a task done")
     p_done.add_argument("id", type=int, nargs="?", help="Task ID")
