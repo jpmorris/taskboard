@@ -298,7 +298,33 @@ Create a Terminator profile in `~/.config/terminator/config`:
 
 The `taskboard-launch` script opens Terminator with this profile.
 
-## Windows Terminal
+## Windows Shortcut (Pin to Start)
+
+You can't pin a `.bat` file directly to the Start menu, so use a two-file approach:
+
+### 1. Create `taskboard.bat`
+
+Save this anywhere (e.g. `C:\Users\<you>\taskboard.bat`):
+
+```bat
+wsl -e /bin/bash -c "~/.local/bin/taskboard watch"
+```
+
+Using `~` avoids hardcoding your username.
+
+### 2. Create a shortcut to pin
+
+1. Right-click `taskboard.bat` → **Create shortcut**
+2. Edit shortcut properties:
+   - **Target:** `C:\Windows\System32\cmd.exe /c "C:\Users\<you>\taskboard.bat"`
+   - **Run:** Minimized (optional, hides the CMD flash)
+3. To pin to Start: move the `.lnk` shortcut to:
+   ```
+   %APPDATA%\Microsoft\Windows\Start Menu\Programs\
+   ```
+   Then right-click it in Start and choose **Pin to Start**.
+
+### Windows Terminal
 
 ```powershell
 wt.exe -p "Taskboard" --size 80,15 --pos 1800,0 -F
