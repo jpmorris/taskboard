@@ -18,6 +18,8 @@ from pathlib import Path
 
 TASKBOARD_DIR = Path.home() / ".taskboard"
 TASKS_FILE = TASKBOARD_DIR / "local.json"
+HISTORY_FILE = TASKBOARD_DIR / "history.json"
+HISTORY_MAX = 20
 # Legacy support: migrate tasks.json → local.json
 _LEGACY_FILE = TASKBOARD_DIR / "tasks.json"
 
@@ -47,7 +49,7 @@ def load_all_tasks():
     """Load local + all remote task files. Returns list of (source, tasks)."""
     result = [("local", load_tasks())]
     for f in sorted(TASKBOARD_DIR.glob("*.json")):
-        if f.name in ("local.json", "tasks.json", "hidden.json", "hook_debug.json"):
+        if f.name in ("local.json", "tasks.json", "hidden.json", "hook_debug.json", "history.json"):
             continue
         if f.suffix == ".json":
             source = f.stem  # e.g. "sagemaker" from sagemaker.json
@@ -65,6 +67,36 @@ def save_tasks(tasks):
         f.flush()
         os.fsync(f.fileno())
     tmp.rename(TASKS_FILE)
+
+
+def load_history():
+    return _load_json(HISTORY_FILE)
+
+
+def _archive_task(task):
+    """Add a completed task to history, keeping at most HISTORY_MAX entries.
+
+    For tasks without a session_id (copilot-style), the existing entry for the
+    same cwd+tool is replaced so there is only one slot per project rather than
+    one entry per prompt completion.
+    """
+    TASKBOARD_DIR.mkdir(parents=True, exist_ok=True)
+    history = load_history()
+    if not task.get("session_id"):
+        # Upsert: replace any existing entry for the same cwd+tool
+        cwd, tool = task.get("cwd"), task.get("tool")
+        history = [h for h in history
+                   if not (h.get("cwd") == cwd and h.get("tool") == tool)]
+    history.append(dict(task))
+    if len(history) > HISTORY_MAX:
+        history = history[-HISTORY_MAX:]
+    tmp = HISTORY_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        json.dump(history, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.rename(HISTORY_FILE)
 
 
 def next_id(tasks):
@@ -114,6 +146,7 @@ def cmd_done(args):
                 t["status"] = "done"
                 t["completed_at"] = datetime.now().isoformat()
                 save_tasks(tasks)
+                _archive_task(t)
                 print(f"#{t['id']} done: {t['description']}")
                 return
         print(f"No running task with ID {args.id}", file=sys.stderr)
@@ -125,6 +158,7 @@ def cmd_done(args):
                 t["status"] = "done"
                 t["completed_at"] = datetime.now().isoformat()
                 save_tasks(tasks)
+                _archive_task(t)
                 print(f"#{t['id']} done: {t['description']}")
                 return
         # No matching session - silently exit (hook may fire without a registered task)
@@ -135,6 +169,7 @@ def cmd_done(args):
                 t["status"] = "done"
                 t["completed_at"] = datetime.now().isoformat()
                 save_tasks(tasks)
+                _archive_task(t)
                 print(f"#{t['id']} done: {t['description']}")
                 return
         print(f"No running task for cwd {args.cwd}", file=sys.stderr)
@@ -332,7 +367,50 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
     if mode_msg:
         sys.stdout.write(f"{mode_msg}\033[K\n")
     else:
-        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ide [q]uit\033[K\n")
+        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ide [H]ist [q]uit\033[K\n")
+    sys.stdout.write("\033[J")
+    sys.stdout.flush()
+
+
+def _render_history_overlay(history):
+    """Render completed task history over the watch screen."""
+    try:
+        term_width = os.get_terminal_size().columns
+    except OSError:
+        term_width = 80
+    desc_width = max(30, term_width - 35)
+
+    sys.stdout.write("\033[H")
+    sys.stdout.write(f"\033[1mTASK HISTORY\033[0m (last {HISTORY_MAX})\033[K\n")
+    sys.stdout.write(f"{'─' * 50}\033[K\n")
+
+    if not history:
+        sys.stdout.write(f"No history yet.\033[K\n")
+    else:
+        for t in reversed(history):
+            is_manual = t.get("tool") == "manual"
+            color = "\033[31m" if t.get("status") == "failed" else "\033[32m"
+            icon = "✗" if t.get("status") == "failed" else "✓"
+            reset = "\033[0m"
+            tool = _trunc(t.get("tool", "?"), 6)
+            elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
+            if is_manual:
+                combined = t["description"]
+            else:
+                cwd_name = os.path.basename(t.get("cwd", "")) or t.get("cwd", "")
+                prefix = t.get("title") or cwd_name
+                combined = f"{prefix}: {t['description']}"
+            desc = _trunc(combined, desc_width)
+            date = (t.get("completed_at") or "")[:10]
+            sys.stdout.write(
+                f"{color} {icon}{reset}"
+                f"[{tool:6}] {desc:{desc_width}}"
+                f" \033[2m{date:10}\033[0m"
+                f" {elapsed:>7}"
+                f"\033[K\n"
+            )
+        sys.stdout.write(f"{'─' * 50}\033[K\n")
+    sys.stdout.write(f"[any key to return]\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -519,6 +597,15 @@ def cmd_watch(args):
                             else:
                                 task.pop("notes", None)
                             save_tasks(tasks)
+            elif key == "H":
+                _render_history_overlay(load_history())
+                tty.setcbreak(sys.stdin)
+                try:
+                    ready, _, _ = select.select([sys.stdin], [], [], 60)
+                    if ready:
+                        sys.stdin.read(1)
+                finally:
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             elif key == "l":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Link which task ID? (enter to cancel)")
@@ -674,13 +761,17 @@ def cmd_run(args):
         returncode = 130
 
     tasks = load_tasks()
+    finished = None
     for t in tasks:
         if t["id"] == task["id"]:
             t["status"] = "done" if returncode == 0 else "failed"
             t["completed_at"] = datetime.now().isoformat()
             t["exit_code"] = returncode
+            finished = t
             break
     save_tasks(tasks)
+    if finished:
+        _archive_task(finished)
     status = "done" if returncode == 0 else f"failed (exit {returncode})"
     print(f"#{task['id']} {status}: {task['description']}")
     sys.exit(returncode)
@@ -787,6 +878,7 @@ def cmd_hook_stop(args):
             t["status"] = "done"
             t["completed_at"] = datetime.now().isoformat()
             save_tasks(tasks)
+            _archive_task(t)
             return
 
     # Fall back to cwd match
@@ -797,6 +889,7 @@ def cmd_hook_stop(args):
             t["status"] = "done"
             t["completed_at"] = datetime.now().isoformat()
             save_tasks(tasks)
+            _archive_task(t)
             return
 
 
@@ -877,6 +970,7 @@ def cmd_hook_copilot_stop(args):
             t["status"] = status
             t["completed_at"] = datetime.now().isoformat()
             save_tasks(tasks)
+            _archive_task(t)
             return
 
 
