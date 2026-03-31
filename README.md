@@ -1,6 +1,7 @@
 # taskboard
 
-sdffA CLI dashboard to track tasks — manual to-dos, AI agent sessions, long-running commands, and remote jobs.
+sdffA CLI dashboard to track tasks — manual to-dos, AI agent sessions,
+long-running commands, and remote jobs.
 
 Task data is stored in `~/.taskboard/tasks.json`.
 
@@ -30,16 +31,17 @@ Interactive auto-refreshing display with keyboard controls:
 - **`h`** — hide window temporarily (i3 scratchpad)
 - **`q`** — quit
 
-Tasks display in the order you set — top is highest priority. IDs renumber automatically after moves/removes.
+Tasks display in the order you set — top is highest priority. IDs renumber
+automatically after moves/removes.
 
 ## Task Statuses
 
-| Status | Icon | Color | Meaning |
-|--------|------|-------|---------|
-| TODO | ○ | cyan | Manual to-do item |
-| RUNNING | ● | yellow | Active process or agent session |
-| DONE | ✓ | green | Completed |
-| FAILED | ✗ | red | Command exited with error |
+| Status  | Icon | Color  | Meaning                         |
+| ------- | ---- | ------ | ------------------------------- |
+| TODO    | ○    | cyan   | Manual to-do item               |
+| RUNNING | ●    | yellow | Active process or agent session |
+| DONE    | ✓    | green  | Completed                       |
+| FAILED  | ✗    | red    | Command exited with error       |
 
 ## Manual To-Dos
 
@@ -54,7 +56,9 @@ Manual tasks get status `TODO` (not `RUNNING`). Remove them when finished.
 
 ## Claude Code Integration
 
-Auto-tracks agent sessions. When you submit a prompt, the task shows as RUNNING. When Claude finishes responding, it flips to DONE. Each session gets its own line — multiple agents in the same directory show separately.
+Auto-tracks agent sessions. When you submit a prompt, the task shows as RUNNING.
+When Claude finishes responding, it flips to DONE. Each session gets its own
+line — multiple agents in the same directory show separately.
 
 ### Setup
 
@@ -65,16 +69,12 @@ Add to `~/.claude/settings.json`:
   "hooks": {
     "UserPromptSubmit": [
       {
-        "hooks": [
-          { "type": "command", "command": "taskboard hook-start" }
-        ]
+        "hooks": [{ "type": "command", "command": "taskboard hook-start" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [
-          { "type": "command", "command": "taskboard hook-stop" }
-        ]
+        "hooks": [{ "type": "command", "command": "taskboard hook-stop" }]
       }
     ]
   }
@@ -85,25 +85,30 @@ Shows as tool `claude` in the dashboard.
 
 ## VS Code Copilot Integration
 
-Same hooks work for VS Code Copilot agent mode. Shows as tool `vscode` in the dashboard (detected via `VSCODE_CWD` environment variable).
+Same hooks work for VS Code Copilot agent mode. Shows as tool `vscode` in the
+dashboard (detected via `VSCODE_CWD` environment variable).
 
 ### Setup
 
 1. The hooks in `~/.claude/settings.json` (above) are shared with VS Code
 2. In VS Code settings, enable:
    - **Chat: Use Hooks** — checked
-   - **Chat: Use Claude Hooks** — checked (required for Claude-format hook files)
+   - **Chat: Use Claude Hooks** — checked (required for Claude-format hook
+     files)
 3. Reload VS Code (`Ctrl+Shift+P` → "Developer: Reload Window")
 
 Verify hooks are loaded: type `/hooks` in the Copilot chat.
 
 ### WSL (Windows)
 
-If running Claude Code in WSL, put the hooks in the WSL-side `~/.claude/settings.json`. For VS Code on Windows with WSL remote, the extension host runs in WSL so the same config works.
+If running Claude Code in WSL, put the hooks in the WSL-side
+`~/.claude/settings.json`. For VS Code on Windows with WSL remote, the extension
+host runs in WSL so the same config works.
 
 ## Copilot CLI Integration
 
-Auto-tracks Copilot CLI agent sessions. Shows as tool `copilot` in the dashboard.
+Auto-tracks Copilot CLI agent sessions. Shows as tool `copilot` in the
+dashboard.
 
 ### Setup
 
@@ -129,9 +134,12 @@ Create `.github/hooks/taskboard.json` in your project repository:
 }
 ```
 
-Unlike Claude hooks (which are global), Copilot CLI hooks are per-project (loaded from `.github/hooks/*.json` in the repository).
+Unlike Claude hooks (which are global), Copilot CLI hooks are per-project
+(loaded from `.github/hooks/*.json` in the repository).
 
-Since Copilot CLI doesn't include a session ID in hook payloads, tasks are matched by working directory — one task per active `cwd`. If a session ends with an error, it shows as `failed`.
+Since Copilot CLI doesn't include a session ID in hook payloads, tasks are
+matched by working directory — one task per active `cwd`. If a session ends with
+an error, it shows as `failed`.
 
 ### Adding taskboard tracking to a new repo
 
@@ -141,21 +149,23 @@ Run this one-liner from the repo root to create the hook file:
 mkdir -p .github/hooks && cp ~/workspace/taskboard/.github/hooks/taskboard.json .github/hooks/
 ```
 
-Or manually create `.github/hooks/taskboard.json` with the JSON above. Then start a fresh Copilot CLI session from that directory — hooks are loaded at session start based on cwd, so **you must `cd` into the repo before launching** (not `/resume`).
-
-**Repos with taskboard tracking enabled:**
-- `~/workspace/taskboard` (reference copy)
-- `~/workspace/cgap-looker`
+Or manually create `.github/hooks/taskboard.json` with the JSON above. Then
+start a fresh Copilot CLI session from that directory — hooks are loaded at
+session start based on cwd, so **you must `cd` into the repo before launching**
+(not `/resume`).
 
 ## Remote Agent Tracking (Reverse Tunnel)
 
-Track AI agent sessions running on a remote server (e.g. SageMaker) on your local dashboard. No taskboard installation needed on the remote — just `curl`.
+Track AI agent sessions running on a remote server (e.g. SageMaker) on your
+local dashboard. No taskboard installation needed on the remote — just `curl`.
 
 ### How it works
 
 1. Your SSH connection script adds reverse port forwards (`-R`)
-2. Local machine runs `socat` listeners that pipe data to `taskboard hook-start/stop`
-3. Remote `~/.claude/settings.json` uses `curl` to POST hook data through the tunnel
+2. Local machine runs `socat` listeners that pipe data to
+   `taskboard hook-start/stop`
+3. Remote `~/.claude/settings.json` uses `curl` to POST hook data through the
+   tunnel
 4. Tasks appear in your local `tasks.json` — no syncing, no polling
 
 ### Local machine setup
@@ -169,7 +179,8 @@ sudo pacman -S socat
 sudo apt install socat
 ```
 
-Start listeners (your connection script should start these when the tunnel is up, kill them on disconnect):
+Start listeners (your connection script should start these when the tunnel is
+up, kill them on disconnect):
 
 ```bash
 socat TCP-LISTEN:9998,reuseaddr,fork EXEC:"taskboard hook-start" &
@@ -178,13 +189,15 @@ socat TCP-LISTEN:9999,reuseaddr,fork EXEC:"taskboard hook-stop" &
 
 ### SSH tunnel setup
 
-Add reverse port forwards to your SSH connection. The exact command depends on your tunnel setup, but the key flags are:
+Add reverse port forwards to your SSH connection. The exact command depends on
+your tunnel setup, but the key flags are:
 
 ```bash
 ssh ... -R 9998:localhost:9998 -R 9999:localhost:9999 remote-host
 ```
 
-For SSM-based connections, add the `-R` flags to whichever SSH command establishes the tunnel.
+For SSM-based connections, add the `-R` flags to whichever SSH command
+establishes the tunnel.
 
 ### Remote server setup
 
@@ -196,14 +209,20 @@ On the remote server (SageMaker etc.), create `~/.claude/settings.json`:
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "curl -sf http://localhost:9998 -d @-" }
+          {
+            "type": "command",
+            "command": "curl -sf http://localhost:9998 -d @-"
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "curl -sf http://localhost:9999 -d @-" }
+          {
+            "type": "command",
+            "command": "curl -sf http://localhost:9999 -d @-"
+          }
         ]
       }
     ]
@@ -212,16 +231,20 @@ On the remote server (SageMaker etc.), create `~/.claude/settings.json`:
 ```
 
 Also enable in VS Code settings on the remote:
+
 - **Chat: Use Hooks** — checked
 - **Chat: Use Claude Hooks** — checked
 
-That's it. When an agent fires on the remote, `curl` POSTs the hook JSON through the reverse tunnel to your local socat, which pipes it to `taskboard hook-start/stop`. Tasks appear on your local dashboard instantly.
+That's it. When an agent fires on the remote, `curl` POSTs the hook JSON through
+the reverse tunnel to your local socat, which pipes it to
+`taskboard hook-start/stop`. Tasks appear on your local dashboard instantly.
 
 If the tunnel is down, `curl -sf` fails silently — no impact on the agent.
 
 ## Wrapping Commands (`taskboard run`)
 
-Track any command — local or remote. Adds a RUNNING task, executes the command, marks DONE or FAILED on exit.
+Track any command — local or remote. Adds a RUNNING task, executes the command,
+marks DONE or FAILED on exit.
 
 ```bash
 taskboard run "description" -- command args...
@@ -237,7 +260,8 @@ taskboard run "copy dataset" -- rsync -av /src /dst
 
 ### Remote commands via SSH
 
-The local `ssh` process exits when the remote command finishes — no callbacks needed.
+The local `ssh` process exits when the remote command finishes — no callbacks
+needed.
 
 ```bash
 taskboard run "train model" -- ssh sagemaker "python train.py"
@@ -256,13 +280,15 @@ taskboard run "full pipeline" -- ssh sagemaker "bash -s" < ./remote_pipeline.sh
 taskboard run "deploy" -t deploy -- ./deploy.sh   # custom tool name
 ```
 
-Exit code is preserved, so you can chain: `taskboard run "test" -- pytest && echo "passed"`.
+Exit code is preserved, so you can chain:
+`taskboard run "test" -- pytest && echo "passed"`.
 
 Runs through the shell, so builtins, pipes, and redirects all work.
 
 ## CPU Monitoring (`taskboard monitor`)
 
-Monitor a process's CPU usage and automatically toggle RUNNING/DONE based on a threshold. Useful for tracking remote debug sessions or batch jobs.
+Monitor a process's CPU usage and automatically toggle RUNNING/DONE based on a
+threshold. Useful for tracking remote debug sessions or batch jobs.
 
 ```bash
 taskboard monitor "description" -- command-that-outputs-cpu-percent
@@ -285,7 +311,8 @@ taskboard monitor "remote training" -- ssh sagemaker 'ps -p $(pgrep -f train.py)
 -t tool          # custom tool name (default: monitor)
 ```
 
-Cycles automatically: CPU above threshold → RUNNING, below → DONE. `Ctrl+C` to stop.
+Cycles automatically: CPU above threshold → RUNNING, below → DONE. `Ctrl+C` to
+stop.
 
 ## i3 Floating Dashboard
 
@@ -314,7 +341,8 @@ The `taskboard-launch` script opens Terminator with this profile.
 
 ## Windows Shortcut (Pin to Start)
 
-You can't pin a `.bat` file directly to the Start menu, so use a two-file approach:
+You can't pin a `.bat` file directly to the Start menu, so use a two-file
+approach:
 
 ### 1. Create `taskboard.bat`
 
@@ -344,7 +372,8 @@ Using `~` avoids hardcoding your username.
 wt.exe -p "Taskboard" --size 80,15 --pos 1800,0 -F
 ```
 
-`-F` is focus mode (no tabs/title bar). Set `"historySize": 0` in the Windows Terminal profile to prevent scrollback ghosting.
+`-F` is focus mode (no tabs/title bar). Set `"historySize": 0` in the Windows
+Terminal profile to prevent scrollback ghosting.
 
 ## Other Commands
 

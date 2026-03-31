@@ -12,6 +12,7 @@ import subprocess
 import fcntl
 import termios
 import tty
+import readline as _rl
 from datetime import datetime
 from pathlib import Path
 
@@ -191,6 +192,20 @@ def _read_input(prompt_text, timeout=10):
     return None
 
 
+def _read_input_prefilled(prompt_text, prefill=""):
+    """Read a line of input with pre-filled editable text using readline."""
+    def hook():
+        _rl.insert_text(prefill)
+    _rl.set_startup_hook(hook)
+    try:
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        return input(prompt_text)
+    except EOFError:
+        return None
+    finally:
+        _rl.set_startup_hook(None)
+
+
 def _trunc(s, width):
     return s[:width-1] + "~" if len(s) > width else s
 
@@ -211,15 +226,17 @@ def _render_task(t, desc_width=30, source=None):
         combined = t["description"]
     else:
         cwd_name = os.path.basename(t.get("cwd", "")) or t.get("cwd", "")
-        combined = f"{cwd_name}: {t['description']}"
+        prefix = t.get("title") or cwd_name
+        combined = f"{prefix}: {t['description']}"
     desc = _trunc(combined, desc_width)
     id_part = f"{t['id']:>2}" if not source else " "
     due_text, due_color = _format_due(t)
     due_col = f" {due_color}{due_text}{reset}" if due_color else f" {due_text}"
     link_marker = f"\033[2m@\033[0m" if t.get("link") else " "
+    note_marker = f"\033[2m¬\033[0m" if t.get("notes") else " "
     sys.stdout.write(
         f"{color}{id_part}{icon}{reset}"
-        f"[{tool:6}]{link_marker}{desc:{desc_width}}"
+        f"[{tool:6}]{link_marker}{note_marker}{desc:{desc_width}}"
         f"{due_col}"
         f" {elapsed:>7}"
         f"\033[K\n"
@@ -281,8 +298,8 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
         term_width = os.get_terminal_size().columns
     except OSError:
         term_width = 80
-    # Fixed columns: 3 (id+icon) + 8 ([tool:6]) + 1 (space) + 6 (due) + 8 ( elapsed) + 2 (link @)
-    desc_width = max(30, term_width - 28)
+    # Fixed columns: 3 (id+icon) + 8 ([tool:6]) + 2 (@¬) + 6 (due) + 8 ( elapsed)
+    desc_width = max(30, term_width - 29)
 
     sys.stdout.write("\033[H")
     now = datetime.now().strftime("%m/%d %H:%M")
@@ -315,7 +332,7 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
     if mode_msg:
         sys.stdout.write(f"{mode_msg}\033[K\n")
     else:
-        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [l]ink [h]ide [q]uit\033[K\n")
+        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ide [q]uit\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -465,6 +482,43 @@ def cmd_watch(args):
                                         t["due_date"] = parsed.isoformat()
                                 break
                         save_tasks(tasks)
+            elif key == "e":
+                tasks = load_tasks()
+                _render_watch(tasks, mode_msg="Edit title - which task ID? (enter to cancel)")
+                answer = _read_input(" > ")
+                if answer and answer.isdigit():
+                    tid = int(answer)
+                    task = next((t for t in tasks if t["id"] == tid), None)
+                    if task and task.get("tool") != "manual":
+                        cwd_name = os.path.basename(task.get("cwd", "")) or task.get("cwd", "")
+                        current = task.get("title") or cwd_name
+                        _render_watch(tasks, mode_msg=f"New title for #{tid} (current: {current}):")
+                        new_title = _read_input(" > ", timeout=120)
+                        if new_title is not None:
+                            new_title = new_title.strip()
+                            if new_title:
+                                task["title"] = new_title
+                            else:
+                                task.pop("title", None)
+                            save_tasks(tasks)
+            elif key == "n":
+                tasks = load_tasks()
+                _render_watch(tasks, mode_msg="Notes - which task ID? (enter to cancel)")
+                answer = _read_input(" > ")
+                if answer and answer.isdigit():
+                    tid = int(answer)
+                    task = next((t for t in tasks if t["id"] == tid), None)
+                    if task:
+                        existing = task.get("notes", "")
+                        _render_watch(tasks, mode_msg=f"Notes for #{tid}: (clear to delete)")
+                        new_notes = _read_input_prefilled(" > ", prefill=existing)
+                        if new_notes is not None:
+                            new_notes = new_notes.strip()
+                            if new_notes:
+                                task["notes"] = new_notes
+                            else:
+                                task.pop("notes", None)
+                            save_tasks(tasks)
             elif key == "l":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Link which task ID? (enter to cancel)")
