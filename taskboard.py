@@ -146,7 +146,6 @@ def cmd_done(args):
                 t["status"] = "done"
                 t["completed_at"] = datetime.now().isoformat()
                 save_tasks(tasks)
-                _archive_task(t)
                 print(f"#{t['id']} done: {t['description']}")
                 return
         print(f"No running task with ID {args.id}", file=sys.stderr)
@@ -158,7 +157,6 @@ def cmd_done(args):
                 t["status"] = "done"
                 t["completed_at"] = datetime.now().isoformat()
                 save_tasks(tasks)
-                _archive_task(t)
                 print(f"#{t['id']} done: {t['description']}")
                 return
         # No matching session - silently exit (hook may fire without a registered task)
@@ -169,7 +167,6 @@ def cmd_done(args):
                 t["status"] = "done"
                 t["completed_at"] = datetime.now().isoformat()
                 save_tasks(tasks)
-                _archive_task(t)
                 print(f"#{t['id']} done: {t['description']}")
                 return
         print(f"No running task for cwd {args.cwd}", file=sys.stderr)
@@ -367,7 +364,7 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
     if mode_msg:
         sys.stdout.write(f"{mode_msg}\033[K\n")
     else:
-        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ide [H]ist [q]uit\033[K\n")
+        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ist [H]ide [q]uit\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -440,7 +437,7 @@ def cmd_watch(args):
 
             if key == "q":
                 break
-            elif key == "h":
+            elif key == "H":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Hide for how many minutes? (default: 2)")
                 answer = _read_input(" > ")
@@ -492,9 +489,12 @@ def cmd_watch(args):
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
+                    removing = next((t for t in tasks if t["id"] == tid), None)
                     new_tasks = [t for t in tasks if t["id"] != tid]
                     if len(new_tasks) < len(tasks):
                         save_tasks(_renumber(new_tasks))
+                        if removing and (removing.get("tool") == "manual" or removing.get("tracked")):
+                            _archive_task(removing)
             elif key == "m":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Move which task ID?")
@@ -597,7 +597,7 @@ def cmd_watch(args):
                             else:
                                 task.pop("notes", None)
                             save_tasks(tasks)
-            elif key == "H":
+            elif key == "h":
                 _render_history_overlay(load_history())
                 tty.setcbreak(sys.stdin)
                 try:
@@ -657,11 +657,14 @@ def cmd_clear(args):
 
 def cmd_rm(args):
     tasks = load_tasks()
-    new_tasks = [t for t in tasks if t["id"] != args.id]
-    if len(new_tasks) == len(tasks):
+    removing = next((t for t in tasks if t["id"] == args.id), None)
+    if removing is None:
         print(f"No task with ID {args.id}", file=sys.stderr)
         sys.exit(1)
+    new_tasks = [t for t in tasks if t["id"] != args.id]
     save_tasks(_renumber(new_tasks))
+    if removing.get("tool") == "manual" or removing.get("tracked"):
+        _archive_task(removing)
     print(f"Removed #{args.id}.")
 
 
@@ -770,8 +773,6 @@ def cmd_run(args):
             finished = t
             break
     save_tasks(tasks)
-    if finished:
-        _archive_task(finished)
     status = "done" if returncode == 0 else f"failed (exit {returncode})"
     print(f"#{task['id']} {status}: {task['description']}")
     sys.exit(returncode)
@@ -878,7 +879,6 @@ def cmd_hook_stop(args):
             t["status"] = "done"
             t["completed_at"] = datetime.now().isoformat()
             save_tasks(tasks)
-            _archive_task(t)
             return
 
     # Fall back to cwd match
@@ -889,7 +889,6 @@ def cmd_hook_stop(args):
             t["status"] = "done"
             t["completed_at"] = datetime.now().isoformat()
             save_tasks(tasks)
-            _archive_task(t)
             return
 
 
@@ -970,12 +969,83 @@ def cmd_hook_copilot_stop(args):
             t["status"] = status
             t["completed_at"] = datetime.now().isoformat()
             save_tasks(tasks)
-            _archive_task(t)
             return
 
 
+def cmd_history(args):
+    """Small always-on-top history display — shows last N completed manual/tracked tasks."""
+    old_settings = termios.tcgetattr(sys.stdin)
+    sys.stdout.write("\033[?1049h\033[?25l")
+    sys.stdout.flush()
+    try:
+        while True:
+            history = load_history()
+            _render_history_display(history)
+            tty.setcbreak(sys.stdin)
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 5)
+                if ready:
+                    key = sys.stdin.read(1)
+                    if key == "q":
+                        break
+                    elif key == "r":
+                        # Remove most-recent entry
+                        if history:
+                            history = history[:-1]
+                            tmp = HISTORY_FILE.with_suffix(".tmp")
+                            with open(tmp, "w") as f:
+                                fcntl.flock(f, fcntl.LOCK_EX)
+                                json.dump(history, f, indent=2)
+                                f.flush()
+                                os.fsync(f.fileno())
+                            tmp.rename(HISTORY_FILE)
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
 
-def main():
+
+def _render_history_display(history):
+    """Compact history display for the standalone history window."""
+    try:
+        term_width = os.get_terminal_size().columns
+    except OSError:
+        term_width = 60
+    w = max(30, term_width - 2)
+
+    sys.stdout.write("\033[H")
+    sys.stdout.write(f"\033[1mHISTORY\033[0m\033[K\n")
+    sys.stdout.write(f"{'─' * min(w, 50)}\033[K\n")
+
+    if not history:
+        sys.stdout.write(f"  (empty)\033[K\n")
+    else:
+        name_w = max(16, w - 20)
+        for t in reversed(history):
+            icon = "\033[31m✗\033[0m" if t.get("status") == "failed" else "\033[32m✓\033[0m"
+            is_manual = t.get("tool") == "manual"
+            if is_manual:
+                name = t["description"]
+            else:
+                cwd_name = os.path.basename(t.get("cwd", "")) or t.get("cwd", "")
+                name = t.get("title") or cwd_name
+            name = _trunc(name, name_w)
+            date = (t.get("completed_at") or "")[:10]
+            elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
+            sys.stdout.write(
+                f" {icon} {name:{name_w}} {date}  {elapsed:>7}\033[K\n"
+            )
+    sys.stdout.write(f"{'─' * min(w, 50)}\033[K\n")
+    sys.stdout.write(f"[r]m last  [q]uit\033[K\n")
+    sys.stdout.write("\033[J")
+    sys.stdout.flush()
+
+
+
     parser = argparse.ArgumentParser(
         prog="taskboard",
         description="Track AI tasks across VSCode windows and CLI sessions.",
@@ -1000,6 +1070,7 @@ def main():
 
     sub.add_parser("list", help="List all tasks")
     sub.add_parser("watch", help="Live dashboard")
+    sub.add_parser("history", help="Small history display (manual/tracked tasks removed with [r]m)")
 
     p_clear = sub.add_parser("clear", help="Clear completed tasks")
     p_clear.add_argument("-a", "--all", action="store_true", help="Clear all tasks")
@@ -1043,6 +1114,7 @@ def main():
         "link": cmd_link,
         "list": cmd_list,
         "watch": cmd_watch,
+        "history": cmd_history,
         "clear": cmd_clear,
         "rm": cmd_rm,
         "hook": cmd_hook,
