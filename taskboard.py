@@ -1016,7 +1016,7 @@ def _render_history_display(history):
     sys.stdout.flush()
 
 
-
+def main():
     parser = argparse.ArgumentParser(
         prog="taskboard",
         description="Track AI tasks across VSCode windows and CLI sessions.",
