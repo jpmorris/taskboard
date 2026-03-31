@@ -364,7 +364,7 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
     if mode_msg:
         sys.stdout.write(f"{mode_msg}\033[K\n")
     else:
-        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ist [H]ide [q]uit\033[K\n")
+        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ist [q]uit\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -437,35 +437,6 @@ def cmd_watch(args):
 
             if key == "q":
                 break
-            elif key == "H":
-                tasks = load_tasks()
-                _render_watch(tasks, mode_msg="Hide for how many minutes? (default: 2)")
-                answer = _read_input(" > ")
-                hide_mins = int(answer) if answer and answer.isdigit() else 2
-                # i3: use scratchpad. Otherwise: xdotool minimize.
-                method = None
-                wid = None
-                try:
-                    r = subprocess.run(["i3-msg", "move scratchpad"], capture_output=True, text=True)
-                    if r.returncode == 0 and "true" in r.stdout:
-                        method = "i3"
-                except FileNotFoundError:
-                    pass
-                if not method:
-                    try:
-                        r = subprocess.run(["xdotool", "getactivewindow"], capture_output=True, text=True)
-                        wid = r.stdout.strip()
-                        if wid:
-                            subprocess.run(["xdotool", "windowminimize", wid], capture_output=True)
-                            method = "xdotool"
-                    except FileNotFoundError:
-                        pass
-                if method:
-                    time.sleep(hide_mins * 60)
-                    if method == "i3":
-                        subprocess.run(["i3-msg", "scratchpad show"], capture_output=True)
-                    elif wid:
-                        subprocess.run(["xdotool", "windowactivate", wid], capture_output=True)
             elif key == "a":
                 tasks = load_tasks()
                 _render_watch(tasks, mode_msg="Add task: (enter to cancel)")
