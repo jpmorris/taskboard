@@ -133,6 +133,20 @@ Unlike Claude hooks (which are global), Copilot CLI hooks are per-project (loade
 
 Since Copilot CLI doesn't include a session ID in hook payloads, tasks are matched by working directory — one task per active `cwd`. If a session ends with an error, it shows as `failed`.
 
+### Adding taskboard tracking to a new repo
+
+Run this one-liner from the repo root to create the hook file:
+
+```bash
+mkdir -p .github/hooks && cp ~/workspace/taskboard/.github/hooks/taskboard.json .github/hooks/
+```
+
+Or manually create `.github/hooks/taskboard.json` with the JSON above. Then start a fresh Copilot CLI session from that directory — hooks are loaded at session start based on cwd, so **you must `cd` into the repo before launching** (not `/resume`).
+
+**Repos with taskboard tracking enabled:**
+- `~/workspace/taskboard` (reference copy)
+- `~/workspace/cgap-looker`
+
 ## Remote Agent Tracking (Reverse Tunnel)
 
 Track AI agent sessions running on a remote server (e.g. SageMaker) on your local dashboard. No taskboard installation needed on the remote — just `curl`.
