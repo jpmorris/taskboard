@@ -6,7 +6,6 @@ import os
 import sys
 import time
 import select
-import signal
 import argparse
 import subprocess
 import fcntl
@@ -49,7 +48,13 @@ def load_all_tasks():
     """Load local + all remote task files. Returns list of (source, tasks)."""
     result = [("local", load_tasks())]
     for f in sorted(TASKBOARD_DIR.glob("*.json")):
-        if f.name in ("local.json", "tasks.json", "hidden.json", "hook_debug.json", "history.json"):
+        if f.name in (
+            "local.json",
+            "tasks.json",
+            "hidden.json",
+            "hook_debug.json",
+            "history.json",
+        ):
             continue
         if f.suffix == ".json":
             source = f.stem  # e.g. "sagemaker" from sagemaker.json
@@ -85,8 +90,9 @@ def _archive_task(task):
     if not task.get("session_id"):
         # Upsert: replace any existing entry for the same cwd+tool
         cwd, tool = task.get("cwd"), task.get("tool")
-        history = [h for h in history
-                   if not (h.get("cwd") == cwd and h.get("tool") == tool)]
+        history = [
+            h for h in history if not (h.get("cwd") == cwd and h.get("tool") == tool)
+        ]
     history.append(dict(task))
     if len(history) > HISTORY_MAX:
         history = history[-HISTORY_MAX:]
@@ -226,8 +232,10 @@ def _read_input(prompt_text, timeout=10):
 
 def _read_input_prefilled(prompt_text, prefill=""):
     """Read a line of input with pre-filled editable text using readline."""
+
     def hook():
         _rl.insert_text(prefill)
+
     _rl.set_startup_hook(hook)
     try:
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
@@ -239,14 +247,14 @@ def _read_input_prefilled(prompt_text, prefill=""):
 
 
 def _trunc(s, width):
-    return s[:width-1] + "~" if len(s) > width else s
+    return s[: width - 1] + "~" if len(s) > width else s
 
 
 def _render_task(t, desc_width=30, source=None):
     """Render a single task line."""
     is_manual = t.get("tool") == "manual"
     if is_manual:
-        color, icon = "\033[32m", " "   # green, no icon
+        color, icon = "\033[32m", " "  # green, no icon
     elif t["status"] == "running":
         color, icon = "\033[33m", "●"  # yellow dot
     else:
@@ -264,8 +272,8 @@ def _render_task(t, desc_width=30, source=None):
     id_part = f"{t['id']:>2}" if not source else " "
     due_text, due_color = _format_due(t)
     due_col = f" {due_color}{due_text}{reset}" if due_color else f" {due_text}"
-    link_marker = f"\033[2m@\033[0m" if t.get("link") else " "
-    note_marker = f"\033[2m¬\033[0m" if t.get("notes") else " "
+    link_marker = "\033[2m@\033[0m" if t.get("link") else " "
+    note_marker = "\033[2m¬\033[0m" if t.get("notes") else " "
     sys.stdout.write(
         f"{color}{id_part}{icon}{reset}"
         f"[{tool:6}]{link_marker}{note_marker}{desc:{desc_width}}"
@@ -284,7 +292,6 @@ def _parse_due_date(s):
             d = datetime.strptime(s, fmt).replace(year=datetime.now().year).date()
             # Roll to next year if the date has already passed by more than a day
             if d < datetime.now().date():
-                from datetime import timedelta
                 d = d.replace(year=d.year + 1)
             return d
         except ValueError:
@@ -305,18 +312,18 @@ def _format_due(t):
         return "     ", ""
     try:
         from datetime import date, timedelta
+
         due = date.fromisoformat(raw)
         today = date.today()
         text = due.strftime("%b%d")  # e.g. "Apr30"
         if due < today:
-            return text, "\033[31m"   # red: overdue
+            return text, "\033[31m"  # red: overdue
         elif due <= today + timedelta(days=3):
-            return text, "\033[33m"   # yellow: soon
+            return text, "\033[33m"  # yellow: soon
         else:
-            return text, "\033[36m"   # cyan: future
+            return text, "\033[36m"  # cyan: future
     except ValueError:
         return "     ", ""
-
 
 
 def _is_tracked(t):
@@ -330,7 +337,6 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
         term_width = os.get_terminal_size().columns
     except OSError:
         term_width = 80
-    # Fixed columns: 3 (id+icon) + 8 ([tool:6]) + 2 (@¬) + 6 (due) + 8 ( elapsed)
     desc_width = max(30, term_width - 29)
 
     sys.stdout.write("\033[H")
@@ -355,16 +361,20 @@ def _render_watch(tasks, remote_groups=None, mode_msg=None):
         for source, rtasks in remote_groups:
             if rtasks:
                 has_any = True
-                sys.stdout.write(f"\033[2m{'─' * 3} {source} {'─' * (44 - len(source))}\033[0m\033[K\n")
+                sys.stdout.write(
+                    f"\033[2m{'─' * 3} {source} {'─' * (44 - len(source))}\033[0m\033[K\n"
+                )
                 for t in rtasks:
                     _render_task(t, desc_width=desc_width, source=source)
 
     if not has_any:
-        sys.stdout.write(f"No tasks.\033[K\n")
+        sys.stdout.write("No tasks.\033[K\n")
     if mode_msg:
         sys.stdout.write(f"{mode_msg}\033[K\n")
     else:
-        sys.stdout.write(f"[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ist [q]uit\033[K\n")
+        sys.stdout.write(
+            "[a]dd [r]m [m]ove [t]rack [d]ue [e]dit [l]ink [n]otes [h]ist [q]uit\033[K\n"
+        )
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -382,7 +392,7 @@ def _render_history_overlay(history):
     sys.stdout.write(f"{'─' * 50}\033[K\n")
 
     if not history:
-        sys.stdout.write(f"No history yet.\033[K\n")
+        sys.stdout.write("No history yet.\033[K\n")
     else:
         for t in reversed(history):
             is_manual = t.get("tool") == "manual"
@@ -407,7 +417,7 @@ def _render_history_overlay(history):
                 f"\033[K\n"
             )
         sys.stdout.write(f"{'─' * 50}\033[K\n")
-    sys.stdout.write(f"[any key to return]\033[K\n")
+    sys.stdout.write("[any key to return]\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -464,7 +474,9 @@ def cmd_watch(args):
                     new_tasks = [t for t in tasks if t["id"] != tid]
                     if len(new_tasks) < len(tasks):
                         save_tasks(_renumber(new_tasks))
-                        if removing and (removing.get("tool") == "manual" or removing.get("tracked")):
+                        if removing and (
+                            removing.get("tool") == "manual" or removing.get("tracked")
+                        ):
                             _archive_task(removing)
             elif key == "m":
                 tasks = load_tasks()
@@ -472,7 +484,9 @@ def cmd_watch(args):
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
-                    _render_watch(tasks, mode_msg=f"Place task #{tid} before which ID? (0 = end)")
+                    _render_watch(
+                        tasks, mode_msg=f"Place task #{tid} before which ID? (0 = end)"
+                    )
                     answer2 = _read_input(" > ")
                     if answer2 and answer2.isdigit():
                         target = int(answer2)
@@ -512,12 +526,20 @@ def cmd_watch(args):
                     save_tasks(tasks)
             elif key == "d":
                 tasks = load_tasks()
-                _render_watch(tasks, mode_msg="Set due date - which task ID? (enter to cancel)")
+                _render_watch(
+                    tasks, mode_msg="Set due date - which task ID? (enter to cancel)"
+                )
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
-                    existing = next((t.get("due_date", "") for t in tasks if t["id"] == tid), "")
-                    hint = f" (current: {existing}, 'clear' to remove)" if existing else " (e.g. Apr30, 3/15)"
+                    existing = next(
+                        (t.get("due_date", "") for t in tasks if t["id"] == tid), ""
+                    )
+                    hint = (
+                        f" (current: {existing}, 'clear' to remove)"
+                        if existing
+                        else " (e.g. Apr30, 3/15)"
+                    )
                     _render_watch(tasks, mode_msg=f"Due date for #{tid}{hint}:")
                     date_str = _read_input(" > ", timeout=120)
                     if date_str is not None:
@@ -533,15 +555,22 @@ def cmd_watch(args):
                         save_tasks(tasks)
             elif key == "e":
                 tasks = load_tasks()
-                _render_watch(tasks, mode_msg="Edit title - which task ID? (enter to cancel)")
+                _render_watch(
+                    tasks, mode_msg="Edit title - which task ID? (enter to cancel)"
+                )
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
                     task = next((t for t in tasks if t["id"] == tid), None)
                     if task and task.get("tool") != "manual":
-                        cwd_name = os.path.basename(task.get("cwd", "")) or task.get("cwd", "")
+                        cwd_name = os.path.basename(task.get("cwd", "")) or task.get(
+                            "cwd", ""
+                        )
                         current = task.get("title") or cwd_name
-                        _render_watch(tasks, mode_msg=f"New title for #{tid} (current: {current}):")
+                        _render_watch(
+                            tasks,
+                            mode_msg=f"New title for #{tid} (current: {current}):",
+                        )
                         new_title = _read_input(" > ", timeout=120)
                         if new_title is not None:
                             new_title = new_title.strip()
@@ -552,14 +581,18 @@ def cmd_watch(args):
                             save_tasks(tasks)
             elif key == "n":
                 tasks = load_tasks()
-                _render_watch(tasks, mode_msg="Notes - which task ID? (enter to cancel)")
+                _render_watch(
+                    tasks, mode_msg="Notes - which task ID? (enter to cancel)"
+                )
                 answer = _read_input(" > ")
                 if answer and answer.isdigit():
                     tid = int(answer)
                     task = next((t for t in tasks if t["id"] == tid), None)
                     if task:
                         existing = task.get("notes", "")
-                        _render_watch(tasks, mode_msg=f"Notes for #{tid}: (clear to delete)")
+                        _render_watch(
+                            tasks, mode_msg=f"Notes for #{tid}: (clear to delete)"
+                        )
                         new_notes = _read_input_prefilled(" > ", prefill=existing)
                         if new_notes is not None:
                             new_notes = new_notes.strip()
@@ -588,7 +621,10 @@ def cmd_watch(args):
                         existing = task.get("link", "")
                         if existing:
                             # Reveal mode: show link, offer edit/clear
-                            _render_watch(tasks, mode_msg=f"#{tid}: {existing}  [e]dit [c]lear [enter=dismiss]")
+                            _render_watch(
+                                tasks,
+                                mode_msg=f"#{tid}: {existing}  [e]dit [c]lear [enter=dismiss]",
+                            )
                             action = _read_input(" > ", timeout=120)
                             if action and action.strip().lower() == "e":
                                 _render_watch(tasks, mode_msg=f"New link for #{tid}:")
@@ -659,15 +695,20 @@ def cmd_monitor(args):
     }
     tasks.append(task)
     save_tasks(tasks)
-    print(f"#{task['id']} monitoring: {desc} (CPU threshold: {threshold}%, every {interval}s)")
+    print(
+        f"#{task['id']} monitoring: {desc} (CPU threshold: {threshold}%, every {interval}s)"
+    )
 
     is_active = False
     try:
         while True:
             try:
                 result = subprocess.run(
-                    " ".join(check_cmd), shell=True,
-                    capture_output=True, text=True, timeout=30
+                    " ".join(check_cmd),
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
                 cpu = float(result.stdout.strip()) if result.stdout.strip() else 0.0
             except (ValueError, subprocess.TimeoutExpired):
@@ -797,7 +838,11 @@ def cmd_hook_start(args):
 
     tasks = load_tasks()
 
-    tool = "vscode" if (os.environ.get("VSCODE_PID") or os.environ.get("VSCODE_CWD")) else "claude"
+    tool = (
+        "vscode"
+        if (os.environ.get("VSCODE_PID") or os.environ.get("VSCODE_CWD"))
+        else "claude"
+    )
 
     # One line per session (reuse across prompts within same session)
     for t in tasks:
@@ -989,15 +1034,19 @@ def _render_history_display(history):
     w = max(30, term_width - 2)
 
     sys.stdout.write("\033[H")
-    sys.stdout.write(f"\033[1mHISTORY\033[0m\033[K\n")
+    sys.stdout.write("\033[1mHISTORY\033[0m\033[K\n")
     sys.stdout.write(f"{'─' * min(w, 50)}\033[K\n")
 
     if not history:
-        sys.stdout.write(f"  (empty)\033[K\n")
+        sys.stdout.write("  (empty)\033[K\n")
     else:
         name_w = max(16, w - 20)
         for t in reversed(history):
-            icon = "\033[31m✗\033[0m" if t.get("status") == "failed" else "\033[32m✓\033[0m"
+            icon = (
+                "\033[31m✗\033[0m"
+                if t.get("status") == "failed"
+                else "\033[32m✓\033[0m"
+            )
             is_manual = t.get("tool") == "manual"
             if is_manual:
                 name = t["description"]
@@ -1007,11 +1056,9 @@ def _render_history_display(history):
             name = _trunc(name, name_w)
             date = (t.get("completed_at") or "")[:10]
             elapsed = format_elapsed(t["created_at"], t.get("completed_at"))
-            sys.stdout.write(
-                f" {icon} {name:{name_w}} {date}  {elapsed:>7}\033[K\n"
-            )
+            sys.stdout.write(f" {icon} {name:{name_w}} {date}  {elapsed:>7}\033[K\n")
     sys.stdout.write(f"{'─' * min(w, 50)}\033[K\n")
-    sys.stdout.write(f"[r]m last  [q]uit\033[K\n")
+    sys.stdout.write("[r]m last  [q]uit\033[K\n")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -1026,9 +1073,13 @@ def main():
     p_add = sub.add_parser("add", help="Add a new running task")
     p_add.add_argument("description", help="What you're working on")
     p_add.add_argument("-t", "--tool", default=None, help="Tool name (claude, copilot)")
-    p_add.add_argument("-c", "--cwd", default=None, help="Working directory (default: cwd)")
+    p_add.add_argument(
+        "-c", "--cwd", default=None, help="Working directory (default: cwd)"
+    )
     p_add.add_argument("-s", "--session", default=None, help="Session ID")
-    p_add.add_argument("-l", "--link", default=None, help="URL to associate with this task")
+    p_add.add_argument(
+        "-l", "--link", default=None, help="URL to associate with this task"
+    )
 
     p_done = sub.add_parser("done", help="Mark a task done")
     p_done.add_argument("id", type=int, nargs="?", help="Task ID")
@@ -1041,7 +1092,9 @@ def main():
 
     sub.add_parser("list", help="List all tasks")
     sub.add_parser("watch", help="Live dashboard")
-    sub.add_parser("history", help="Small history display (manual/tracked tasks removed with [r]m)")
+    sub.add_parser(
+        "history", help="Small history display (manual/tracked tasks removed with [r]m)"
+    )
 
     p_clear = sub.add_parser("clear", help="Clear completed tasks")
     p_clear.add_argument("-a", "--all", action="store_true", help="Clear all tasks")
@@ -1052,21 +1105,35 @@ def main():
     sub.add_parser("hook", help="Stop hook handler (reads JSON from stdin)")
     sub.add_parser("hook-start", help="Start hook handler (reads JSON from stdin)")
     sub.add_parser("hook-stop", help="Stop hook handler (reads JSON from stdin)")
-    sub.add_parser("hook-debug", help="Dump hook input and env to ~/.taskboard/hook_debug.json")
-    sub.add_parser("hook-copilot-start", help="Copilot CLI userPromptSubmitted hook handler")
+    sub.add_parser(
+        "hook-debug", help="Dump hook input and env to ~/.taskboard/hook_debug.json"
+    )
+    sub.add_parser(
+        "hook-copilot-start", help="Copilot CLI userPromptSubmitted hook handler"
+    )
     sub.add_parser("hook-copilot-stop", help="Copilot CLI sessionEnd hook handler")
 
     p_run = sub.add_parser("run", help="Run a command and track it as a task")
     p_run.add_argument("description", help="Task description")
     p_run.add_argument("-t", "--tool", default=None, help="Tool name")
-    p_run.add_argument("cmd", nargs=argparse.REMAINDER, help="Command to run (after --)")
+    p_run.add_argument(
+        "cmd", nargs=argparse.REMAINDER, help="Command to run (after --)"
+    )
 
-    p_mon = sub.add_parser("monitor", help="Monitor a process CPU and toggle running/done")
+    p_mon = sub.add_parser(
+        "monitor", help="Monitor a process CPU and toggle running/done"
+    )
     p_mon.add_argument("description", help="Task description")
     p_mon.add_argument("-t", "--tool", default=None, help="Tool name")
-    p_mon.add_argument("--threshold", type=float, default=10.0, help="CPU%% threshold (default: 10)")
-    p_mon.add_argument("--interval", type=int, default=5, help="Poll interval in seconds (default: 5)")
-    p_mon.add_argument("cmd", nargs=argparse.REMAINDER, help="Command that outputs CPU%% (after --)")
+    p_mon.add_argument(
+        "--threshold", type=float, default=10.0, help="CPU%% threshold (default: 10)"
+    )
+    p_mon.add_argument(
+        "--interval", type=int, default=5, help="Poll interval in seconds (default: 5)"
+    )
+    p_mon.add_argument(
+        "cmd", nargs=argparse.REMAINDER, help="Command that outputs CPU%% (after --)"
+    )
 
     args = parser.parse_args()
 
@@ -1076,7 +1143,10 @@ def main():
             if args.cmd and args.cmd[0] == "--":
                 args.cmd = args.cmd[1:]
             if not args.cmd:
-                print(f"Provide a command after -- (e.g., taskboard {cmd_name} \"desc\" -- command)", file=sys.stderr)
+                print(
+                    f'Provide a command after -- (e.g., taskboard {cmd_name} "desc" -- command)',
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
     commands = {
